@@ -1,0 +1,14 @@
+# Auto detect text files and perform LF normalization on checkout
+* text=auto eol=lf
+
+# Explicitly ensure markdown files use LF
+*.md text eol=lf
+
+# Ensure shell scripts always use LF
+*.sh text eol=lf
+*.bash text eol=lf
+
+# PowerShell scripts can use CRLF or LF
+*.ps1 text
+*.bat text eol=crlf
+*.cmd text eol=crlf
