@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Token-saving helper CLI for VeriHunt v2.0 (standard library only).
+"""Token-saving helper CLI for VeriHunt v2.1 (standard library only).
 
 Automates session setup, project recon, isolated test execution with
 deterministic harness validation (00-common.md §3), batch round runs,
-append-only worklog updates, log digest checks, and sandbox lifecycle.
+append-only worklog updates, log digest/snippet checks, and sandbox lifecycle.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import difflib
 import json
 import os
 from pathlib import Path
@@ -1821,6 +1822,329 @@ def _sanitize_tid(tid: str) -> str:
     return clean
 
 
+def _format_repro_cmd(cmd: Sequence[str], root: Path) -> str:
+    """Format an executed command cleanly relative to ROOT for report reproduction."""
+    if not cmd:
+        return ""
+    root_res = root.resolve()
+    py_res = Path(sys.executable).resolve()
+    formatted: List[str] = []
+    for idx, tok in enumerate(cmd):
+        val = tok
+        if idx == 0:
+            try:
+                tok_p = Path(tok)
+                if tok_p.is_absolute() or "/" in tok or "\\" in tok:
+                    tok_res = tok_p.resolve()
+                    if root_res in tok_res.parents:
+                        val = rel_posix(tok_res, root_res)
+                    elif tok_res == py_res:
+                        val = "python"
+                elif tok_p.name.lower().startswith("python") and Path(shutil.which(tok) or tok).resolve() == py_res:
+                    val = "python"
+            except OSError:
+                pass
+        else:
+            try:
+                tok_p = Path(tok)
+                if tok_p.is_absolute():
+                    tok_res = tok_p.resolve()
+                    if tok_res == root_res:
+                        val = "."
+                    elif root_res in tok_res.parents:
+                        val = rel_posix(tok_res, root_res)
+            except OSError:
+                pass
+        if any(c in val for c in (" ", "\t")) and not (
+            (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'"))
+        ):
+            val = f'"{val}"'
+        formatted.append(val)
+    return " ".join(formatted)
+
+
+def _record_cmd_meta(s_dir: Path, entries: Dict[str, str]) -> None:
+    """Persist tid -> reproduction command map inside S/logs/.cmds.json."""
+    if not entries:
+        return
+    meta_path = s_dir / "logs" / ".cmds.json"
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    data: Dict[str, str] = {}
+    if meta_path.is_file():
+        try:
+            loaded = json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
+            if isinstance(loaded, dict):
+                data = {str(k): str(v) for k, v in loaded.items()}
+        except (OSError, ValueError):
+            data = {}
+    data.update(entries)
+    tmp_path = s_dir / "logs" / ".cmds.json.tmp"
+    tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp_path, meta_path)
+
+
+def _load_cmd_meta(s_dir: Path) -> Dict[str, str]:
+    """Load persisted tid -> reproduction command map from S/logs/.cmds.json."""
+    meta_path = s_dir / "logs" / ".cmds.json"
+    if not meta_path.is_file():
+        return {}
+    try:
+        loaded = json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
+        if isinstance(loaded, dict):
+            return {str(k): str(v) for k, v in loaded.items()}
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
+def _infer_repro_cmd(
+    tid: str,
+    res: DigestResult,
+    root: Path,
+    s_dir: Path,
+    sname: str,
+    log_text: str,
+    cmd_meta: Dict[str, str],
+    log_suffix: str = "",
+) -> str:
+    """Return recorded reproduction command or infer it from discovered tests/log."""
+    meta_key = f"{tid}{log_suffix}"
+    if meta_key in cmd_meta:
+        return cmd_meta[meta_key]
+    if tid in cmd_meta:
+        return cmd_meta[tid]
+
+    in_fix = log_suffix == "_fix" and (s_dir / "sandbox-fix").is_dir()
+    search_root = (s_dir / "sandbox-fix") if in_fix else root
+    try:
+        discovered = _discover_round_tests(search_root, s_dir, sname, None, in_fix=in_fix)
+    except OSError:
+        discovered = {}
+    if tid in discovered:
+        try:
+            cmd, _, _ = _build_auto_cmd(
+                tid,
+                discovered[tid],
+                search_root,
+                s_dir,
+                sname,
+                root / ".bughunt" / ".cache",
+                res.runner if res.runner != "generic" else "auto",
+                _find_python_exe(root),
+                res.runner == "pytest",
+                {},
+            )
+            return _format_repro_cmd(cmd, root)
+        except SystemExit:
+            pass
+
+    m_file = re.search(
+        r"(\.bughunt/[^\s:\"']+\.(?:py|js|mjs|cjs|ts|mts|go|java|kt|cs|php|rs))",
+        log_text.replace("\\", "/"),
+    )
+    if m_file:
+        f_rel = m_file.group(1)
+        if res.runner == "pytest":
+            return f"python -m pytest {f_rel} -p no:cacheprovider -v"
+        if res.runner == "node":
+            return f"node --test --test-reporter=tap {f_rel}"
+        return f_rel
+
+    if res.runner == "pytest":
+        return f"python -m pytest {rel_posix(s_dir, root)}/tests/test_{tid}*.py -p no:cacheprovider -v"
+    if res.runner == "unittest":
+        return f"python -m unittest discover -s {rel_posix(s_dir, root)}/tests -p \"test_{tid}*.py\" -v"
+    return f"python scripts/bh.py check --s {rel_posix(s_dir, root)} --tid {tid}"
+
+
+def _extract_snippet_lines(log_text: str, res: DigestResult, budget: int) -> List[str]:
+    """Extract up to ``budget`` high-signal assertion/traceback lines (excluding exit=)."""
+    if budget <= 0:
+        return []
+    clean = strip_ansi(log_text)
+    raw_lines = [ln.rstrip("\r\n") for ln in clean.splitlines()]
+    lines = [ln for ln in raw_lines if not re.match(r"^exit=-?\d+\s*$", ln.strip())]
+    picked: List[str] = []
+
+    def add_line(ln: str) -> None:
+        s = ln.rstrip()
+        if not s.strip():
+            return
+        if len(s) > 220:
+            s = s[:217] + "..."
+        if s not in picked and len(picked) < budget:
+            picked.append(s)
+
+    if res.status in ("TIMEOUT", "EXEC_ERROR"):
+        for ln in lines:
+            if "[bh.py] TIMEOUT" in ln or "[bh.py] EXEC_ERROR" in ln:
+                add_line(ln)
+        if not picked:
+            for ln in lines[-budget:]:
+                add_line(ln)
+        return picked
+
+    if res.runner == "pytest":
+        primary_e: List[Tuple[int, str]] = []
+        diff_e: List[str] = []
+        tb_locs: List[str] = []
+        fail_summaries: List[str] = []
+        collect_errs: List[str] = []
+
+        for idx, ln in enumerate(lines):
+            m_e = re.match(r"^E\s{2,}(.+)$", ln)
+            if m_e:
+                body = m_e.group(1)
+                if re.match(r"^(?:[-+?]\s|\.\.\.)", body):
+                    diff_e.append(ln)
+                else:
+                    primary_e.append((idx, ln))
+            elif re.match(r"^[^\s>E=_-].*?:\d+:\s+\S+", ln):
+                tb_locs.append(ln)
+            elif re.match(r"^(?:FAILED|ERROR|SUBFAILED(?:\([^)]*\))?)\s+\S+", ln):
+                fail_summaries.append(ln)
+            elif re.match(r"^(?:ERROR collecting\b|(?:ImportError|ModuleNotFoundError|SyntaxError|IndentationError):)", ln):
+                collect_errs.append(ln)
+
+        if primary_e:
+            # Prefer distinct assertion/exception lines first, plus traceback file:line & FAILED line
+            seen_e_norm: set[str] = set()
+            distinct_e: List[Tuple[int, str]] = []
+            for idx, ln in primary_e:
+                norm = " ".join(ln.split())
+                if norm not in seen_e_norm:
+                    seen_e_norm.add(norm)
+                    distinct_e.append((idx, ln))
+
+            if len(distinct_e) == 1 or budget <= 2:
+                add_line(distinct_e[0][1])
+                first_idx = distinct_e[0][0]
+                near_tb = next(
+                    (
+                        lines[j]
+                        for j in range(first_idx + 1, min(len(lines), first_idx + 8))
+                        if re.match(r"^[^\s>E=_-].*?:\d+:\s+\S+", lines[j])
+                    ),
+                    tb_locs[0] if tb_locs else "",
+                )
+                if near_tb:
+                    add_line(near_tb)
+                if fail_summaries:
+                    add_line(fail_summaries[0])
+            else:
+                # Multiple distinct failures: show up to budget-1 distinct E lines + location/summary
+                e_cap = max(1, budget - 1)
+                for _, ln in distinct_e[:e_cap]:
+                    add_line(ln)
+                if fail_summaries:
+                    add_line(fail_summaries[0])
+                elif tb_locs:
+                    add_line(tb_locs[0])
+        else:
+            for ln in (collect_errs + diff_e + tb_locs + fail_summaries):
+                add_line(ln)
+    elif res.runner == "unittest":
+        blocks = re.split(r"^={70}$", clean, flags=re.M)
+        for blk in blocks:
+            blk_s = re.split(r"^-{70}\r?\nRan\s+\d+\s+tests?", blk, maxsplit=1, flags=re.M)[0].strip()
+            if not (blk_s.startswith("ERROR:") or blk_s.startswith("FAIL:")):
+                continue
+            blk_lines = [ln for ln in blk_s.splitlines() if ln.strip()]
+            if blk_lines:
+                exc = blk_lines[-1]
+                file_ln = next((ln for ln in reversed(blk_lines) if ln.lstrip().startswith('File "')), "")
+                hdr = blk_lines[0]
+                add_line(exc)
+                if file_ln:
+                    add_line(file_ln.strip())
+                add_line(hdr)
+            if len(picked) >= budget:
+                break
+        if len(picked) < budget:
+            for ln in lines:
+                if ln.startswith("FAILED ("):
+                    add_line(ln)
+    elif res.runner in ("node", "jest", "vitest", "mocha"):
+        for pat in (
+            r"^\s*not ok\s+\d+",
+            r"^\s*[✕×✖●]\s+",
+            r"^\s*\d+\)\s+",
+            r"(?:AssertionError|Error:|TypeError:|ReferenceError:|SyntaxError:|MODULE_NOT_FOUND|error:)",
+            r"^\s*(?:Expected|Received|actual|expected)\b",
+            r"^\s*at\s+.*:\d+",
+        ):
+            for ln in lines:
+                if re.search(pat, ln):
+                    add_line(ln.strip())
+                    if len(picked) >= budget:
+                        break
+            if len(picked) >= budget:
+                break
+    elif res.runner == "go":
+        for pat in (r"WARNING: DATA RACE", r"^---\s+FAIL:", r"^\s*\S+_test\.go:\d+:"):
+            for ln in lines:
+                if re.search(pat, ln):
+                    add_line(ln.strip())
+                    if len(picked) >= budget:
+                        break
+            if len(picked) >= budget:
+                break
+    else:
+        for pat in (
+            r"<<<\s*(?:FAILURE|ERROR)!",
+            r"(?:AssertionError|Failed asserting|panicked at|Error Message:|error\[E\d+\]|\berror CS\d+\b)",
+            r"^(?:\[ERROR\]|\s*Failed\s+\S+|\d+\)\s+|test\s+\S+\s+\.\.\.\s+FAILED\b)",
+        ):
+            for ln in lines:
+                if re.search(pat, ln):
+                    add_line(ln.strip())
+                    if len(picked) >= budget:
+                        break
+            if len(picked) >= budget:
+                break
+
+    if not picked:
+        for msg in res.failures:
+            add_line(msg)
+    if not picked:
+        non_empty = [ln.strip() for ln in lines if ln.strip() and not ln.strip().startswith("====")]
+        for ln in non_empty[-budget:]:
+            add_line(ln)
+    return picked[:budget]
+
+
+def format_snippet_block(
+    res: DigestResult,
+    log_text: str,
+    repro_cmd: str,
+    max_lines: int = 6,
+) -> str:
+    """Render a compact <=max_lines snippet block for Phase 6 reports."""
+    limit = max(1, int(max_lines))
+    exit_s = str(res.exit_code) if res.exit_code is not None else "?"
+    if res.harness_signals:
+        failed_with = "; ".join(res.harness_signals[:2])
+    elif res.data_race:
+        failed_with = "WARNING: DATA RACE"
+    elif res.failures:
+        failed_with = trunc(res.failures[0], 100)
+    else:
+        failed_with = f"exit={exit_s}"
+
+    cmd_line = f"[SNIPPET {res.tid}] cmd: {trunc(repro_cmd, 200)}"
+    harness_line = f"harness: Ran {res.ran} tests | Control test: {res.control_status} | Failed with: {failed_with}"
+    exit_line = f"exit={exit_s}"
+
+    if limit <= 3:
+        lines = [cmd_line, harness_line, exit_line][:limit]
+        return "\n".join(lines)
+
+    budget = limit - 3
+    ev_lines = _extract_snippet_lines(log_text, res, budget)
+    lines = [cmd_line, harness_line, *ev_lines[:budget], exit_line]
+    return "\n".join(lines[:limit])
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """Execute one command, store full log, and print <=12-line digest."""
     root, s_dir, _, cache_dir = resolve_session(args.s, args.root)
@@ -1837,6 +2161,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     log_file = s_dir / "logs" / log_name
     env = build_isolated_env(cache_dir)
 
+    _record_cmd_meta(s_dir, {f"{tid}{args.log_suffix}": _format_repro_cmd(cmd, root)})
     full_log, rc, duration = _execute_to_log(cmd, cwd, env, log_file, int(args.timeout))
     res = evaluate_log(
         full_log,
@@ -1854,10 +2179,13 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def cmd_check(args: argparse.Namespace) -> int:
     """Inspect existing S/logs/<TID>.log (or round/all) without re-running."""
-    root, s_dir, _, _ = resolve_session(args.s, args.root)
+    root, s_dir, sname, _ = resolve_session(args.s, args.root)
     logs_dir = s_dir / "logs"
     if not logs_dir.is_dir():
         raise SystemExit(f"[bh.py] ERROR: Logs directory not found: {logs_dir}")
+
+    cmd_meta = _load_cmd_meta(s_dir) if args.snippets else {}
+    max_snip = max(1, int(args.max_snippet_lines))
 
     if args.tid:
         tid = _sanitize_tid(args.tid)
@@ -1867,6 +2195,10 @@ def cmd_check(args: argparse.Namespace) -> int:
         txt = log_file.read_text(encoding="utf-8", errors="replace")
         res = evaluate_log(txt, tid=tid, runner=args.runner, log_path=rel_posix(log_file, root))
         print(format_digest(res))
+        if args.snippets and res.status != "ALL_PASS":
+            repro = _infer_repro_cmd(tid, res, root, s_dir, sname, txt, cmd_meta, args.log_suffix)
+            print()
+            print(format_snippet_block(res, txt, repro, max_lines=max_snip))
         return 0
 
     if args.round is not None:
@@ -1885,14 +2217,25 @@ def cmd_check(args: argparse.Namespace) -> int:
         raise SystemExit(f"[bh.py] ERROR: No matching log files in {logs_dir} ({pattern})")
 
     results: List[DigestResult] = []
+    texts: List[str] = []
     for lf in candidates:
         tid = lf.stem
         if args.log_suffix and tid.endswith(args.log_suffix):
             tid = tid[: -len(args.log_suffix)]
         txt = lf.read_text(encoding="utf-8", errors="replace")
+        texts.append(txt)
         results.append(evaluate_log(txt, tid=tid, runner=args.runner, log_path=rel_posix(lf, root)))
 
     print(format_round_table(results, header=f"[CHECK {len(results)} logs]"))
+    if args.snippets:
+        blocks: List[str] = []
+        for res, txt in zip(results, texts):
+            if res.status == "VALID_BUG_FAIL" or res.status != "ALL_PASS":
+                repro = _infer_repro_cmd(res.tid, res, root, s_dir, sname, txt, cmd_meta, args.log_suffix)
+                blocks.append(format_snippet_block(res, txt, repro, max_lines=max_snip))
+        if blocks:
+            print()
+            print("\n\n".join(blocks))
     return 0
 
 
@@ -2303,6 +2646,11 @@ def cmd_round(args: argparse.Namespace) -> int:
             )
         tasks.append((tid, cmd, extra_env, runner_name))
 
+    _record_cmd_meta(
+        s_dir,
+        {f"{tid}{log_suffix}": _format_repro_cmd(cmd, root) for tid, cmd, _, _ in tasks},
+    )
+
     def run_one(item: Tuple[str, List[str], Dict[str, str], str]) -> DigestResult:
         tid, cmd, extra_env, runner_name = item
         env = dict(base_env)
@@ -2613,8 +2961,59 @@ def _clean_new_agent_caches(root: Path, diff: Dict[str, List[str]], snap_mode: s
     return sorted(set(removed))
 
 
+def _collect_source_files_for_diff(
+    base: Path, global_excl: set[str], root_excl: set[str]
+) -> Dict[str, Path]:
+    """Walk ``base`` and map relative POSIX path -> file path, skipping caches, binaries, and agent tests."""
+    files: Dict[str, Path] = {}
+    if not base.is_dir():
+        return files
+    base_res = base.resolve()
+    extra_dir_skip = frozenset({"surefire-reports", "test-results"})
+    for dirpath, dirnames, filenames in os.walk(base_res):
+        dp = Path(dirpath)
+        rel_dir = dp.relative_to(base_res)
+        at_root = rel_dir == Path(".")
+        filtered_dirs: List[str] = []
+        for d in sorted(dirnames):
+            if d in global_excl or d in extra_dir_skip:
+                continue
+            if at_root and d in root_excl:
+                continue
+            cand = dp / d
+            if cand.is_symlink() and not cand.exists():
+                continue
+            filtered_dirs.append(d)
+        dirnames[:] = filtered_dirs
+
+        for fname in sorted(filenames):
+            if _is_agent_sandbox_test(fname):
+                continue
+            fp = dp / fname
+            if fp.suffix.lower() in BINARY_EXTS:
+                continue
+            if fname.lower().endswith((".pyc", ".pyo", ".class")):
+                continue
+            rel = fname if at_root else f"{rel_dir.as_posix()}/{fname}"
+            files[rel] = fp
+    return files
+
+
+def _read_text_lines_for_diff(fp: Path) -> Optional[List[str]]:
+    """Return text lines for ``fp`` or None if binary/unreadable/oversized."""
+    try:
+        if fp.stat().st_size > 2_000_000:
+            return None
+        raw = fp.read_bytes()
+    except OSError:
+        return None
+    if b"\x00" in raw[:4096]:
+        return None
+    return raw.decode("utf-8", errors="replace").splitlines()
+
+
 def cmd_sandbox(args: argparse.Namespace) -> int:
-    """Automate sandbox creation, sandbox-fix setup, and Phase 6 cleanup + cleanliness diff."""
+    """Automate sandbox creation, sandbox-fix setup, compact diff, and Phase 6 cleanup."""
     root, s_dir, sname, cache_dir = resolve_session(args.s, args.root)
     global_excl, root_excl = _compute_sandbox_exclusions(root, args.exclude or [])
 
@@ -2652,6 +3051,90 @@ def cmd_sandbox(args: argparse.Namespace) -> int:
             f"[SANDBOX fix] path={rel_posix(fix_dir, root)} files={copied} "
             f"replicated_tests={replicated} duration={dur:.2f}s"
         )
+        return 0
+
+    if args.mode == "diff":
+        fix_dir = s_dir / "sandbox-fix"
+        if not fix_dir.is_dir():
+            raise SystemExit(f"[bh.py] ERROR: {fix_dir} not found; run --mode fix first")
+        sb_dir = s_dir / "sandbox"
+        base_dir = sb_dir if sb_dir.is_dir() else root
+        base_map = _collect_source_files_for_diff(base_dir, global_excl, root_excl)
+        fix_map = _collect_source_files_for_diff(fix_dir, global_excl, root_excl)
+
+        all_rels = sorted(set(base_map) | set(fix_map))
+        file_diffs: List[Tuple[str, str]] = []
+        for rel in all_rels:
+            b_fp = base_map.get(rel)
+            f_fp = fix_map.get(rel)
+            if b_fp is not None and f_fp is not None:
+                a_lines = _read_text_lines_for_diff(b_fp)
+                b_lines = _read_text_lines_for_diff(f_fp)
+            elif b_fp is None and f_fp is not None:
+                a_lines = []
+                b_lines = _read_text_lines_for_diff(f_fp)
+            else:
+                a_lines = _read_text_lines_for_diff(b_fp) if b_fp is not None else None
+                b_lines = []
+            if a_lines is None or b_lines is None or a_lines == b_lines:
+                continue
+            udiff = list(
+                difflib.unified_diff(
+                    a_lines,
+                    b_lines,
+                    fromfile=f"a/{rel}",
+                    tofile=f"b/{rel}",
+                    n=2,
+                    lineterm="",
+                )
+            )
+            if udiff:
+                file_diffs.append((rel, "\n".join(udiff)))
+
+        base_label = rel_posix(base_dir, root) if base_dir != root else "ROOT"
+        fix_label = rel_posix(fix_dir, root)
+        header = f"[SANDBOX diff] base={base_label} target={fix_label} files_changed={len(file_diffs)}"
+        if not file_diffs:
+            print(f"{header} (no changes)")
+            return 0
+
+        max_out = 7950
+        chunks: List[str] = [header]
+        used = len(header)
+        omitted_files = 0
+        truncated = False
+        for idx, (_, diff_txt) in enumerate(file_diffs):
+            sep = "\n\n" if idx > 0 else "\n"
+            needed = len(sep) + len(diff_txt)
+            if used + needed <= max_out - 90:
+                chunks.append(sep + diff_txt)
+                used += needed
+            else:
+                remaining = max_out - 90 - used - len(sep)
+                if remaining > 120:
+                    partial_lines: List[str] = []
+                    p_used = 0
+                    for ln in diff_txt.splitlines():
+                        add = len(ln) + (1 if partial_lines else 0)
+                        if p_used + add > remaining:
+                            break
+                        partial_lines.append(ln)
+                        p_used += add
+                    if partial_lines:
+                        chunks.append(sep + "\n".join(partial_lines))
+                        omitted_files = len(file_diffs) - idx - 1
+                    else:
+                        omitted_files = len(file_diffs) - idx
+                else:
+                    omitted_files = len(file_diffs) - idx
+                truncated = True
+                break
+
+        out = "".join(chunks)
+        if truncated:
+            note = f"\n... (truncated to stay <=8000 chars; {omitted_files} remaining file(s) omitted)"
+            out = out[: max(0, 7999 - len(note))] + note
+        print(out)
         return 0
 
     # mode == "clean"
@@ -2719,7 +3202,7 @@ def cmd_sandbox(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bh.py",
-        description="VeriHunt v2.0 helper CLI: compact workspace, recon, test runner, and log tools.",
+        description="VeriHunt v2.1 helper CLI: compact workspace, recon, test runner, and log tools.",
     )
     sub = parser.add_subparsers(dest="subcommand", required=True)
 
@@ -2767,6 +3250,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_check.add_argument("--all", action="store_true", help="Digest all logs in S/logs/")
     p_check.add_argument("--runner", choices=SUPPORTED_RUNNERS, default="auto", help="Runner parser")
     p_check.add_argument("--log-suffix", default="", help="Log filename suffix (e.g. _fix)")
+    p_check.add_argument(
+        "--snippets",
+        action="store_true",
+        help="Append compact <=N-line evidence snippets for VALID_BUG_FAIL/failed logs",
+    )
+    p_check.add_argument(
+        "--max-snippet-lines",
+        type=int,
+        default=6,
+        help="Max lines per snippet block when --snippets is set (default: 6)",
+    )
     p_check.add_argument("--root", default=None, help="Project ROOT override")
     p_check.set_defaults(func=cmd_check)
 
@@ -2778,9 +3272,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_log.add_argument("--root", default=None, help="Project ROOT override")
     p_log.set_defaults(func=cmd_log)
 
-    p_sb = sub.add_parser("sandbox", help="Manage S/sandbox, S/sandbox-fix, and Phase 6 cleanup")
+    p_sb = sub.add_parser("sandbox", help="Manage S/sandbox, S/sandbox-fix, compact diffs, and Phase 6 cleanup")
     p_sb.add_argument("--s", required=True, help="Session directory path")
-    p_sb.add_argument("--mode", required=True, choices=("create", "fix", "clean"), help="Sandbox action")
+    p_sb.add_argument("--mode", required=True, choices=("create", "fix", "diff", "clean"), help="Sandbox action")
     p_sb.add_argument("--exclude", action="append", default=[], help="Extra directory names to exclude")
     p_sb.add_argument("--force", action="store_true", help="Overwrite existing sandbox/sandbox-fix")
     p_sb.add_argument("--root", default=None, help="Project ROOT override")

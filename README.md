@@ -1,7 +1,7 @@
 # VeriHunt 🎯🔍
 
 [![Agent Skills Standard](https://img.shields.io/badge/Agent%20Skills-Compliant-blue.svg)](https://agentskills.io)
-[![Version](https://img.shields.io/badge/Version-2.0.0-purple.svg)](https://github.com/lufus4826-eng/verihunt/releases/tag/v2.0.0)
+[![Version](https://img.shields.io/badge/Version-2.1.0-purple.svg)](https://github.com/lufus4826-eng/verihunt/releases/tag/v2.1.0)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/Platforms-Claude%20Code%20%7C%20Antigravity%20%7C%20Cursor%20%7C%20Windsurf-green.svg)](#installation--การติดตั้ง)
 [![Cross Platform](https://img.shields.io/badge/OS-Windows%20%7C%20macOS%20%7C%20Linux-orange.svg)](#supported-stacks--ภาษาและเครื่องมือที่รองรับ)
@@ -13,11 +13,11 @@
 
 ---
 
-## ✨ What's New in v2.0 / มีอะไรใหม่ใน VeriHunt v2.0
+## ✨ What's New in v2.0 / v2.1 — มีอะไรใหม่ใน VeriHunt
 
-VeriHunt v2.0 is a major architectural upgrade built from quantitative analysis of 94 historical bug-hunting transcripts and live blind-benchmark verification:
+VeriHunt v2.0 is a major architectural upgrade built from quantitative analysis of 94 historical bug-hunting transcripts and live blind-benchmark verification (refined in **v2.1** with `--snippets`, `sandbox --mode diff`, and turn-fusion guardrails):
 
-VeriHunt v2.0 เป็นการยกเครื่องสถาปัตยกรรมครั้งใหญ่จากข้อมูลการใช้งานจริง 94 transcripts และการทดสอบแบบ Blind Benchmark:
+VeriHunt v2.0 เป็นการยกเครื่องสถาปัตยกรรมครั้งใหญ่จากข้อมูลการใช้งานจริง 94 transcripts และการทดสอบแบบ Blind Benchmark (และอัปเกรดต่อใน **v2.1** ด้วย `--snippets`, `sandbox --mode diff` และกติการวมรอบคำสั่งเพื่อลดเทิร์น):
 
 1. **Unified Bilingual Skill (`/verihunt`):** Merges `bug-hunter` (EN) and `bug-hunter-th` (TH) into one skill. VeriHunt automatically matches your prompt language (English or Thai) and lazy-loads only the matching report template (`resources/report-template.md` or `resources/report-template-th.md`) in Phase 6.
    - **รวมสกิล EN + TH เป็นหนึ่งเดียว (`/verihunt`):** ตอบรับและสร้างรายงานตามภาษาที่คุณพิมพ์สั่งงานโดยอัตโนมัติ (ไทยหรืออังกฤษ) โดยโหลดแม่แบบรายงานเฉพาะภาษาที่ต้องการใน Phase 6 เท่านั้น
@@ -161,9 +161,9 @@ flowchart TD
 | `recon [--root .]` | Emits a `<=35`-line project map (instruction files, languages, manifests, entrypoints, existing tests, LOC by directory, `TODO`/`FIXME` hits, git churn & fix commits). |
 | `run --s S --tid TID -- <cmd>` | Executes command with cache/offline/UTF-8 env vars, writes raw output + `exit=<code>` to `S/logs/<TID>.log`, and prints a `<=12`-line digest (`ALL_PASS` \| `VALID_BUG_FAIL` \| `HARNESS_BROKEN` \| `TIMEOUT` \| `EXEC_ERROR`). |
 | `round --s S (--round N \| --all) [--fix]` | Auto-discovers round tests (`test_r{N}_h*`, `BugHuntR{N}H*`, `bughunt_r{N}_h*`), runs them, and outputs a compact round summary table (`--fix` targets `S/sandbox-fix/` and writes `<TID>_fix.log`). |
-| `check --s S (--tid TID \| --round N \| --all)` | *(Alias `digest`)* Re-parses existing `S/logs/*.log` deterministically without re-running (used in Team Mode verdict validation). |
-| `log --s S [--status ...] [--entry ...]` | Atomically updates line-1 `Status:` of `S/worklog.md` and appends entries without rewriting the full file. |
-| `sandbox --s S --mode create\|fix\|clean` | Copies clean project sandbox (preserving `vendor/`, skipping `.git`/caches/build dirs), replicates tests for `sandbox-fix`, or cleans temp dirs, archives sandbox tests, and diffs `fs-before.txt` vs `fs-after.txt`. |
+| `check --s S (--tid TID \| --round N \| --all) [--snippets]` | *(Alias `digest`)* Re-parses existing `S/logs/*.log` deterministically without re-running (`--snippets` appends compact `<=6`-line repro cmd, harness line, and failure excerpt + `exit=` for Phase 6). |
+| `log --s S [--status ...] [--entry ...]` | Atomically updates line-1 `Status:` of `S/worklog.md` and appends concise 1-line `--entry` flags without rewriting the full file. |
+| `sandbox --s S --mode create\|fix\|diff\|clean` | Copies clean project sandbox (preserving `vendor/`, skipping `.git`/caches/build dirs), replicates tests for `sandbox-fix`, prints compact `<=8,000`-char unified diffs (`diff`), or cleans temp dirs, archives sandbox tests, and diffs `fs-before.txt` vs `fs-after.txt` (`clean`). |
 
 ---
 
@@ -201,7 +201,7 @@ verihunt/
 ├── CONTRIBUTING.md                   # Contributor guidelines (EN + TH)
 ├── LICENSE                           # MIT License
 ├── scripts/
-│   └── bh.py                         # Deterministic stdlib Python helper CLI (v2.0)
+│   └── bh.py                         # Deterministic stdlib Python helper CLI (v2.1)
 └── resources/
     ├── report-template.md            # 9-section report template — English (Phase 6 lazy-load)
     ├── report-template-th.md         # 9-section report template — Thai (Phase 6 lazy-load)

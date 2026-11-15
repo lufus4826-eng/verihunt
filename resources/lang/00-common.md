@@ -9,11 +9,11 @@ Use `bh.py` for setup, recon, isolated runs, digests, worklog updates, and sandb
 - `python "<BH>" recon [--root .]` -> `<=35`-line map (instructions, languages, manifests, entrypoints, tests, LOC, TODOs, git churn/fixes).
 - `python "<BH>" run --s "$S" --tid <TID> [--runner r] [--cwd dir] [--timeout 600] [--log-suffix suf] -- <cmd...>` -> logs raw output + `exit=<code>` to `S/logs/<TID>.log`, prints `<=12`-line digest (`ALL_PASS|VALID_BUG_FAIL|HARNESS_BROKEN|TIMEOUT|EXEC_ERROR`).
 - `python "<BH>" round --s "$S" (--round N | --all) [--tids a,b] [--fix] [--runner r] [--parallel 1] [--cmd-template TPL]` -> discovers & runs round tests (`test_r{N}_h*`, `BugHuntR{N}H*`, `bughunt_r{N}_h*`); `--fix` uses `S/sandbox-fix` & `_fix.log`.
-- `python "<BH>" check --s "$S" (--tid <TID> | --round N | --all)` -> parses existing logs without re-running (Team Mode verdict check).
-- `python "<BH>" log --s "$S" [--status "..."] [--entry "..." | --entry-file path]` -> updates `worklog.md` line-1 `Status:` + appends text. (Prefer repeatable `--entry` or `--entry-file` over stdin pipes on Windows PowerShell).
-- `python "<BH>" sandbox --s "$S" --mode create|fix|clean [--exclude dir] [--force]` -> creates `S/sandbox`, sets up `S/sandbox-fix` + replicated tests, or cleans temp/cache/sandbox dirs + archives sandbox tests/JVM XML + writes/diffs `fs-after.txt` + auto-removes untracked `__pycache__`/`.pytest_cache`.
+- `python "<BH>" check --s "$S" (--tid <TID> | --round N | --all) [--snippets] [--max-snippet-lines 6]` -> parses existing logs without re-running (Team Mode verdict check; `--snippets` appends compact `<=6`-line repro cmd, harness line, assertion/traceback excerpt + `exit=` for failed logs, eliminating Phase 6 log reads).
+- `python "<BH>" log --s "$S" [--status "..."] [--entry "..."]` -> updates `worklog.md` line-1 `Status:` + appends concise 1-line `--entry "R1-H1 | CONFIRMED (E1, Critical) | path:line | mechanism"` flags directly. **FORBIDDEN:** never create `S/tmp/*.md` files to feed `--entry-file`, and never spend a standalone turn calling only `bh.py log` (fuse into the next test-writing, `round`, or Phase 5/6 turn).
+- `python "<BH>" sandbox --s "$S" --mode create|fix|diff|clean [--exclude dir] [--force]` -> creates `S/sandbox`, sets up `S/sandbox-fix` + replicated tests, prints compact `<=8,000`-char unified diffs between `ROOT` (or `S/sandbox` if present) and `S/sandbox-fix` (`diff`), or cleans temp/cache/sandbox dirs + archives sandbox tests/JVM XML + writes/diffs `fs-after.txt` + auto-removes untracked `__pycache__`/`.pytest_cache` (`clean`).
 
-If ever running raw shell commands outside `bh.py` on Windows PowerShell 5.1, wrap via `cmd /c "<cmd> > log 2>&1"` to prevent `NativeCommandError`/encoding issues; never dump logs or source via `Get-Content`.
+If ever running raw shell commands outside `bh.py` on Windows PowerShell 5.1, wrap via `cmd /c "<cmd> > log 2>&1"` to prevent `NativeCommandError`/encoding issues; never dump logs or source via `Get-Content` or call `read_file` on `S/logs/*.log`.
 
 ## 2. Dependency & Network Prevention
 | Ecosystem | Prevention | If Missing |
