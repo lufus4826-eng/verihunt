@@ -1,55 +1,41 @@
 # Rust Adapter
 
 ## 1. Core Principles
-- Always use `S/sandbox/` (exclude `/target` during sandbox copy) and redirect `CARGO_TARGET_DIR` to the central cache folder to accelerate rebuilds within the session.
-- Always include `--offline --locked` on every cargo invocation: guarantees zero network downloading of crates and prevents any changes to `Cargo.lock`.
-- **Testing Public APIs:** Add integration tests at `S/sandbox/tests/bughunt_<TID>.rs` (In Cargo workspaces, place inside the specific crate's `tests/` directory and append `-p <crate_name>`).
-- **Testing Private Functions:** Append an inline test module to the target source file in the **sandbox copy**: `#[cfg(test)] mod bughunt_<TID> { use super::*; ... }`, then invoke via `--lib bughunt_<TID>`.
-- Relative path dependencies (`path = "../x"`) in `Cargo.toml` pointing outside ROOT can be rewritten to absolute paths in the **sandbox copy**.
+- Always use `S/sandbox/` (`python "<BH>" sandbox --s "$S" --mode create`; auto-excludes `/target`). `bh.py` redirects `CARGO_TARGET_DIR` to `.bughunt/.cache/cargo-target`.
+- Always pass `--offline --locked` on every `cargo` command (blocks crate downloads and lockfile edits).
+- **Public APIs:** Integration test at `S/sandbox/tests/bughunt_<TID>.rs` (Cargo workspaces: inside crate's `tests/` + `-p <crate>`).
+- **Private functions:** Append inline `#[cfg(test)] mod bughunt_<TID> { use super::*; ... }` in the **sandbox copy** and run `--lib bughunt_<TID>`.
+- Rewrite external relative `path = "../x"` dependencies in `S/sandbox/Cargo.toml` to absolute paths if needed.
 
-## 2. Executing Hypothesis Tests
-```bash
-CARGO_TARGET_DIR="$CACHE/cargo-target" cargo test --offline --locked --manifest-path "$S/sandbox/Cargo.toml" \
-  --test bughunt_${TID} > "$S/logs/$TID.log" 2>&1; echo "exit=$?" >> "$S/logs/$TID.log"
-# For private unit tests: replace --test bughunt_${TID} with --lib bughunt_${TID}
-```
-```powershell
-$env:CARGO_TARGET_DIR = "$CACHE\cargo-target"
-cmd /c "cargo test --offline --locked --manifest-path `"$S\sandbox\Cargo.toml`" --test bughunt_$TID > `"$S\logs\$TID.log`" 2>&1"; "exit=$LASTEXITCODE" | Add-Content "$S\logs\$TID.log"
-```
-- Integer overflow defects: Test both in standard debug mode and with `--release` (release profiles disable `overflow-checks` by default, wrapping around silently instead of panicking).
+## 2. Executing Hypothesis Tests & Baseline (`bh.py`)
+- **Batch round:** `python "<BH>" round --s "$S" --round N` (auto-runs `cargo test --offline --locked --manifest-path "$S/sandbox/Cargo.toml" --test bughunt_<TID>`).
+- **Private unit tests / `--release` overflow check:**
+  - `python "<BH>" run --s "$S" --tid <TID> -- cargo test --offline --locked --manifest-path "$S/sandbox/Cargo.toml" --lib bughunt_<TID>`
+  - Integer overflow: test debug AND `--release` (`release` disables `overflow-checks`, wrapping silently).
+- **Baseline (from `ROOT` since `CARGO_TARGET_DIR` is redirected):**
+  - `python "<BH>" run --s "$S" --tid baseline -- cargo test --offline --locked`
+  - `python "<BH>" run --s "$S" --tid baseline_clippy -- cargo clippy --offline --locked`
 
-## 3. Baseline Commands (Runnable from ROOT because target dir is redirected to cache)
-```bash
-CARGO_TARGET_DIR="$CACHE/cargo-target" cargo test --offline --locked
-CARGO_TARGET_DIR="$CACHE/cargo-target" cargo clippy --offline --locked
-```
-
-## 4. Example (`S/sandbox/tests/bughunt_r1_h7.rs`)
+## 3. Example (`S/sandbox/tests/bughunt_r1_h7.rs`)
 ```rust
-// ID: R1-H7 | TID: r1_h7
-// Target: src/billing.rs:parse_amount (public API)
+// ID: R1-H7 | TID: r1_h7 | Target: src/billing.rs:parse_amount
 // Run: cargo test --offline --locked --manifest-path .bughunt/<SNAME>/sandbox/Cargo.toml --test bughunt_r1_h7
 use my_crate::billing::parse_amount;
 
 #[test]
-fn control_parses_plain_amount() {
-    assert_eq!(parse_amount("12.50"), Ok(1250));
-}
+fn control_parses_plain_amount() { assert_eq!(parse_amount("12.50"), Ok(1250)); }
 
 #[test]
-fn rejects_amount_that_overflows_instead_of_panicking() {
-    // Desired behavior: returns Err rather than panicking on unwrap or arithmetic overflow
-    let result = std::panic::catch_unwind(|| parse_amount("99999999999999999999.99"));
-    assert!(matches!(result, Ok(Err(_))), "expected Err, got panic or Ok: {:?}", result.map(|r| r.is_ok()));
+fn rejects_overflow_instead_of_panicking() {
+    let res = std::panic::catch_unwind(|| parse_amount("99999999999999999999.99"));
+    assert!(matches!(res, Ok(Err(_))), "expected Err, got {:?}", res.map(|r| r.is_ok()));
 }
 ```
 
-## 5. Common Rust Pitfalls & Bug Patterns
-- **Panics on `.unwrap()` / `.expect()`:** Triggered when inputs yield `None` or `Err` in production (parsing, slicing, lock poisoning).
-- **Silent integer overflow in release mode:** Debug builds panic, but release builds wrap silently. Truncating integer casts using `as` (`u64 as u32`, `f64 as i32`) drop upper bits without warning.
-- **Holding `std::sync::Mutex` guards across `.await` points:** Triggers deadlocks or prevents future sends; use `tokio::sync::Mutex` or restructure to drop guards before await.
-- **Lock ordering deadlocks:** Acquiring multiple mutexes in non-deterministic order across threads.
-- **Blocking operations in async executors:** Calling `std::thread::sleep` or synchronous file/network I/O inside tokio worker threads starves the runtime.
-- **Memory leaks via reference cycles:** Using `Rc<RefCell<T>>` or `Arc<Mutex<T>>` with circular references.
-- **String slicing on byte boundaries:** Slicing UTF-8 strings (`&s[..n]`) across multi-byte character boundaries panics at runtime (common with Thai, CJK, and emojis).
+## 4. Common Rust Pitfalls
+- **`.unwrap()` / `.expect()` panics** on `None`/`Err` inputs or poisoned locks.
+- **Silent integer overflow in `--release` & truncating `as` casts** (`u64 as u32`, `f64 as i32`).
+- **Holding `std::sync::Mutex` across `.await`** or inconsistent multi-lock ordering (deadlocks).
+- **Blocking in async runtime:** `std::thread::sleep` or sync I/O starving tokio workers.
+- **Reference cycles:** `Rc<RefCell<T>>` / `Arc<Mutex<T>>` memory leaks.
+- **Byte-index string slicing (`&s[..n]`):** Panics across multi-byte UTF-8 boundaries (Thai, CJK, emoji).

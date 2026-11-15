@@ -1,6 +1,6 @@
 ---
 name: Bug Report / False Positive
-about: Report a false positive or issue with Bug Hunter execution
+about: Report a false positive or issue with VeriHunt execution
 title: '[BUG] '
 labels: bug
 assignees: ''

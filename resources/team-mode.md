@@ -1,29 +1,43 @@
-# Team Mode (Multi-Agent Dispatch)
+# Team Mode (Multi-Agent Dispatch — Lazy-Loaded for >=50k LOC)
 
-An optional coordination strategy for large codebases when running on agent runtimes that support subagents. Conserves the primary agent's context window and enables parallel hypothesis verification.
+Optional strategy for large codebases when runtime supports subagents.
 
-## Role Distribution
-- **Primary Agent:** Coordinates Phases 0–2 and 4–6. Acts as the sole author of `worklog.md` and `bug-report.md`.
-- **Subagents:** Investigate and prove one hypothesis per subagent (Phase 3).
+## Role Distribution & Persistent Workers
+- **Primary Agent:** Runs Phases 0–2 and 4–6; sole writer of `S/worklog.md` and `S/bug-report.md`.
+- **Persistent Module Workers (Mandatory Pattern):** Spawn **1 worker per module/risk-area** and reuse it across rounds (via `send_message` on persistent-agent runtimes) rather than spawning cold single-hypothesis subagents every round (eliminates repeated recon and source re-reads).
 
-## Subagent Dispatch Brief
-When dispatching a subagent for a hypothesis, provide:
-1. Complete hypothesis card (per Phase 2 format).
-2. Explicit values for `ROOT`, `S`, `SNAME`, and `TID`.
-3. Path to `SKILL.md` with instructions to read: "Supreme Principle", "Identifier & Naming Conventions", "Isolated Workspace Rules", "Phase 3 (Execution & Proof)", "Absolute Prohibitions", and "Warning Signs".
-4. Path to `resources/lang/00-common.md` and the detected language adapter.
-5. Pre-execution security constraints from Phase 1.3 (environment variables requiring override, sensitive services to avoid).
-6. Required response format: The structured verdict block from Phase 3 (Verdict, Evidence Level, Severity, Test File, Harness Validation result, Log Path, Root Cause, Proposed Fix). Subagents must never dump raw logs into the return message.
+## Non-Polling & Digest Verification Guardrails (Mandatory)
+1. **Never Poll:** NEVER call `manage_subagents`, `manage_task`, `schedule`, or sleep loops to check worker progress. After dispatching workers, end your turn (or perform independent non-conflicting work) and wait for reactive wakeup notifications.
+2. **Zero Skill Reloads:** Do NOT tell subagents to read `SKILL.md`, `00-common.md`, or adapters. Provide the compact inline brief below instead.
+3. **Deterministic Verdict Verification (No Source/Log Re-Read Spam):**
+   - Primary MUST independently verify harness integrity before accepting `CONFIRMED` or `REFUTED`.
+   - Run `python "<BH>" check --s "$S" --tid <TID>` (or `--round N`) to verify `ran > 0`, `control: PASS`, and zero §7 breakdown signals.
+   - Read ONLY the test file's assertions/control test (`StartLine`/`EndLine` <=150L) if needed to confirm target code is invoked without mocks replacing target logic.
+   - **Do NOT** dump full `S/logs/<TID>.log` or re-read already-verified project source files repeatedly; reject and ask the worker to fix if `bh.py check` shows `HARNESS_BROKEN` or missing control test.
 
-## File Writing Boundaries for Subagents
-- May write strictly to: `S/tests/*<TID>*` and `S/logs/<TID>*`.
-- In sandbox environments, subagents may only add test files containing their own TID in the filename. They must never modify existing files in the sandbox copy. (If source modifications like `InternalsVisibleTo` are required, request the primary agent to make the adjustment).
-- Subagents must NEVER write to `worklog.md` or `bug-report.md`.
-
-## Verdict Acceptance Protocol
-- **The primary agent MUST inspect the raw log (`S/logs/<TID>.log`) and independently validate harness integrity before accepting any CONFIRMED or REFUTED verdict.** Never accept verdicts based solely on subagent summary text.
-- If harness validation data is missing or invalid, reject the subagent's response and request remediation.
+## Compact Subagent Dispatch Brief Template
+Send ONLY this compact brief per task (~25 lines):
+```text
+Task: Prove hypothesis <ID> (TID=<TID>) in Phase 3.
+Paths: ROOT=<ROOT> | S=<S> | SNAME=<SNAME> | BH=<BH>
+Hypothesis Card: <ID: Name | Loc: path:line->fn | Mechanism | Trigger | Proof Plan>
+Security Overrides: <Env vars to force S/tmp/ or mocks; forbidden live endpoints>
+Language/Concurrency Rules: <filename pattern, offline/sandbox flags, 1-5ms race latency if async/race>
+Rules:
+1. Read ONLY needed target lines via grep + ranged read_file (<=150 lines); never dump whole files.
+2. Write test strictly inside <S>/tests/ (or <S>/sandbox/... for Go/JVM/C#/Rust) naming TID (<TID>).
+   Must import real project code, assert desired behavior (FAIL=bug, PASS=fixed), include >=1 control test (`test_control_*`/`Control_*`), mock external services only, and use timeouts.
+3. Execute via: python "<BH>" run --s "<S>" --tid "<TID>" -- <cmd>
+   Repair up to 3 attempts only if digest shows HARNESS_BROKEN/TIMEOUT/EXEC_ERROR/control!=PASS.
+   Perform self-refutation check for upstream guards (`file:line`).
+4. Write ONLY <S>/tests/*<TID>* and <S>/logs/<TID>*. NEVER touch host files, worklog.md, or bug-report.md (nor existing sandbox source files; ask primary if e.g. InternalsVisibleTo is needed).
+5. Return ONLY this <15-line verdict (NO raw logs):
+   ID: <ID> | TID: <TID> | Verdict: CONFIRMED|REFUTED|INCONCLUSIVE | Evidence: E1|E2|E3 | Severity: Crit|High|Med|Low
+   Test: <path> | Digest: ran=X passed=Y failed=Z control=PASS|FAIL exit=N
+   Root Cause / Guard: <1-2 lines with file:line>
+   Proposed Fix: <concise diff/recommendation or "None">
+```
 
 ## Concurrency Guidelines
-- Interpreted languages without sandbox duplication (Python, JS/TS, PHP) can run subagent proofs concurrently, as each operates in its own test and log files.
-- Compiled languages sharing a common sandbox (Go, Java/Kotlin, C#, Rust) must execute build and test commands sequentially to prevent output directory lock contention.
+- **Interpreted / non-sandbox languages (Python, JS/TS, PHP):** Workers may run tests concurrently (isolated test and log files).
+- **Compiled shared-sandbox languages (Go, Java/Kotlin, C#, Rust):** Serialize build/test executions (or run `bh.py round --parallel 1`) to avoid build output lock contention.

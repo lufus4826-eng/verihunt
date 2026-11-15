@@ -1,115 +1,73 @@
 # JavaScript / TypeScript Adapter
 
 ## 1. Core Principles
-- **Relative path from `S/tests/` to ROOT is `../../../`** (`tests` -> `S` -> `.bughunt` -> `ROOT`). Example: `require('../../../src/auth/token')`.
-- **Inspect `"type"` in `package.json`:** If `"type": "module"` (ESM), use `import` syntax in `.mjs` or `.js` files. If CommonJS, use `require` or name test files `.mjs` when using `import`.
-- **Always invoke CLI tools with `npx --no-install`:** Prevents npx from silently downloading packages from npm when tools are missing locally.
-- Runner selection hierarchy:
-  1. Project's configured runner (Jest / Vitest / Mocha) when code requires transformations (TypeScript, JSX, path aliases).
-  2. Built-in `node --test` (Node 18+) for pure JavaScript. Requires no extra dependencies and writes zero disk caches.
-- TypeScript: Use the project's runner or `npx --no-install tsx --test`. Node 23.6+ can execute `.ts` files directly via `node --test` provided they do not use enums, namespaces, or path aliases.
-- Use `--test-reporter=tap` to produce clean, plain ASCII logs containing parseable `# tests N` and `# fail N` metrics for harness validation.
+- **Relative path from `S/tests/` to `ROOT` is `../../../`** (`tests` -> `S` -> `.bughunt` -> `ROOT`), e.g. `require('../../../src/auth/token')`.
+- **Check `"type"` in `package.json`:** `"module"` (ESM) -> `import` in `.mjs`/`.js`; CommonJS -> `require` (or `.mjs` for `import`).
+- **Always use `npx --no-install <tool>`** to prevent silent npm downloads.
+- **Runner selection:** (1) Project's Jest / Vitest / Mocha when TS/JSX/path-aliases need transforms; (2) built-in `node --test --test-reporter=tap` (Node 18+, zero cache/deps) for plain JS. TS: project runner, `npx --no-install tsx --test`, or Node 23.6+ `node --test` (if no enums/namespaces/path-aliases).
+- **Critical `node --test` trap:** `MODULE_NOT_FOUND` / `SyntaxError` / `ERR_REQUIRE_ESM` exits `1` just like an assertion failure! `bh.py` checks TAP + error signals automatically.
 
-## 2. Executing Hypothesis Tests
-**node --test**
-```bash
-node --test --test-reporter=tap "$S"/tests/test_${TID}_*.test.*js > "$S/logs/$TID.log" 2>&1; echo "exit=$?" >> "$S/logs/$TID.log"
-```
-```powershell
-$files = (Get-ChildItem "$S\tests\test_${TID}_*.test.*js" | ForEach-Object { '"' + $_.FullName + '"' }) -join ' '
-cmd /c "node --test --test-reporter=tap $files > `"$S\logs\$TID.log`" 2>&1"; "exit=$LASTEXITCODE" | Add-Content "$S\logs\$TID.log"
-```
-> Notice: `node --test` flags `MODULE_NOT_FOUND` as `not ok` with an exit code of 1, **identical to legitimate assertion failures**. Always inspect logs before deciding verdicts.
+## 2. Executing Hypothesis Tests (`bh.py`)
+- **Batch (`node --test` default, or auto-detects `S/vitest.bughunt.config.mts` / `S/jest.bughunt.config.cjs`):** `python "<BH>" round --s "$S" --round N [--runner node|jest|vitest|mocha]`
+- **Single run:**
+  - `node --test`: `python "<BH>" run --s "$S" --tid <TID> -- node --test --test-reporter=tap "$S/tests/test_${TID}_x.test.js"`
+  - **Jest:** `python "<BH>" run --s "$S" --tid <TID> --runner jest -- npx --no-install jest --ci --coverage=false --cacheDirectory="$CACHE/jest" --roots="$PWD/$S/tests" test_${TID}_`
+    - If `No tests found`, check `testMatch`/`testRegex`/`testPathIgnorePatterns` and write `S/jest.bughunt.config.cjs` extending the base config with `--config`.
+  - **Vitest** (`mergeConfig` appends arrays, so overwrite `cfg.test.include` after merging):
+    ```ts
+    // S/vitest.bughunt.config.mts
+    import { defineConfig, mergeConfig } from 'vitest/config'
+    import base from '../../vitest.config' // or '../../vite.config'
+    const cfg = mergeConfig(base, defineConfig({ cacheDir: '.bughunt/.cache/vitest', test: { coverage: { enabled: false } } }))
+    cfg.test.include = ['.bughunt/<SNAME>/tests/**/*.test.?(c|m)[jt]s?(x)']
+    export default cfg
+    ```
+    Run: `python "<BH>" run --s "$S" --tid <TID> --runner vitest -- npx --no-install vitest run --config "$S/vitest.bughunt.config.mts"`
+  - **Mocha:** `python "<BH>" run --s "$S" --tid <TID> --runner mocha -- npx --no-install mocha --no-config --timeout 10000 "$S/tests/test_${TID}_x.test.js"`
 
-**Jest** — Reuse project configuration for transforms/aliases while isolating cache and overriding roots:
-```bash
-npx --no-install jest --ci --coverage=false --cacheDirectory="$CACHE/jest" --roots="$PWD/$S/tests" \
-  > "$S/logs/$TID.log" 2>&1; echo "exit=$?" >> "$S/logs/$TID.log"
-```
-- Filenames matching `test_<TID>_x.test.js` align with Jest's default `testMatch`. To isolate a specific file, append the pattern `test_${TID}_`.
-- If `No tests found` occurs: Inspect `testMatch`, `testRegex`, and `testPathIgnorePatterns` in project configs. If needed, create `S/jest.bughunt.config.cjs` that requires the base config and overrides conflicting matchers. If code requires no transform, fall back to `node --test`.
-
-**Vitest** — `mergeConfig` concatenates arrays (combining existing and new includes); explicitly assign `include` after merging:
-```ts
-// S/vitest.bughunt.config.mts
-import { defineConfig, mergeConfig } from 'vitest/config'
-import base from '../../vitest.config'   // Or '../../vite.config' based on project
-const cfg = mergeConfig(base, defineConfig({
-  cacheDir: '.bughunt/.cache/vitest',
-  test: { coverage: { enabled: false } },
-}))
-cfg.test.include = ['.bughunt/<SNAME>/tests/**/*.test.?(c|m)[jt]s?(x)']
-export default cfg
-```
-```bash
-npx --no-install vitest run --config "$S/vitest.bughunt.config.mts" > "$S/logs/$TID.log" 2>&1; echo "exit=$?" >> "$S/logs/$TID.log"
-```
-
-**Mocha**
-```bash
-npx --no-install mocha --no-config --timeout 10000 "$S"/tests/test_${TID}_*.test.*js > "$S/logs/$TID.log" 2>&1; echo "exit=$?" >> "$S/logs/$TID.log"
-```
-
-## 3. Baseline Commands
-- **Inspect `scripts` in `package.json` first:** Run `npm test` as specified. Do not append runner-specific flags across mismatched runners (e.g., `--cacheDirectory` is invalid for Mocha or Vitest).
-- If Jest: `npx --no-install jest --ci --coverage=false --cacheDirectory="$CACHE/jest"`
-- If Vitest: `npx --no-install vitest run --coverage.enabled=false`
-```bash
-npx --no-install eslint --cache --cache-location "$CACHE/eslint/" .
-npx --no-install tsc --noEmit # If incremental build enabled, append --tsBuildInfoFile "$CACHE/tsbuildinfo"
-```
+## 3. Baseline Commands (via `bh.py run --s "$S" --tid baseline -- ...`)
+Inspect `package.json` `scripts` first; never pass Jest flags (e.g. `--cacheDirectory`) to Vitest/Mocha:
+- `npm test` | `npx --no-install jest --ci --coverage=false --cacheDirectory="$CACHE/jest"` | `npx --no-install vitest run --coverage.enabled=false`
+- `npx --no-install eslint --cache --cache-location "$CACHE/eslint/" .`
+- `npx --no-install tsc --noEmit --tsBuildInfoFile "$CACHE/tsbuildinfo"` (if incremental)
 
 ## 4. Example (`S/tests/test_r1_h1_token_expiry.test.js`)
 ```javascript
-// ID: R1-H1 | TID: r1_h1
-// Target: src/auth/token.js:isTokenExpired, src/checkout/service.js:createCheckout
+// ID: R1-H1 | TID: r1_h1 | Target: src/auth/token.js:isTokenExpired, src/checkout/service.js:createCheckout
 // Run: node --test --test-reporter=tap .bughunt/<SNAME>/tests/test_r1_h1_token_expiry.test.js
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { isTokenExpired } = require('../../../src/auth/token');      // tests -> S -> .bughunt -> ROOT
+const { isTokenExpired } = require('../../../src/auth/token');
 const { createCheckout } = require('../../../src/checkout/service');
 
-describe('R1-H1: token boundary', () => {
-  it('control: valid non-expired token must pass', () => {
+describe('R1-H1: token boundary & double submit', () => {
+  it('control: valid token passes', () => {
     assert.equal(isTokenExpired({ exp: 1700000010 }, 1700000000), false);
   });
-
-  it('token with exp timestamp equal to current time must be treated as expired', () => {
-    // If implementation uses `exp < now` instead of `exp <= now`, this test FAILS
+  it('token expiring at exact now is expired', () => {
     assert.equal(isTokenExpired({ exp: 1700000000 }, 1700000000), true);
   });
-});
-
-describe('R1-H1b: double submit concurrency', () => {
-  // Asynchronous fake gateway: introduces event-loop tick between check and act
-  const makeGateway = () => ({
-    charges: 0,
-    async charge() { await new Promise((r) => setImmediate(r)); this.charges += 1; },
+  // Async fake yields event-loop tick between check and act
+  const makeGw = () => ({ charges: 0, async charge() { await new Promise((r) => setImmediate(r)); this.charges += 1; } });
+  it('control: single submit charges once', async () => {
+    const gw = makeGw(); await createCheckout({ gateway: gw }).submit('o1'); assert.equal(gw.charges, 1);
   });
-
-  it('control: single submission results in single charge', async () => {
-    const gateway = makeGateway();
-    await createCheckout({ gateway }).submit('order-1');
-    assert.equal(gateway.charges, 1);
-  });
-
-  it('submitting the same order concurrently must execute only one charge', async () => {
-    const gateway = makeGateway();
-    const svc = createCheckout({ gateway });
-    await Promise.all([svc.submit('order-1'), svc.submit('order-1')]);
-    assert.equal(gateway.charges, 1, `charged ${gateway.charges} times`);
+  it('concurrent submits charge only once', async () => {
+    const gw = makeGw(); const svc = createCheckout({ gateway: gw });
+    await Promise.all([svc.submit('o1'), svc.submit('o1')]);
+    assert.equal(gw.charges, 1, `charged ${gw.charges} times`);
   });
 });
 ```
 
-## 5. Common JS/TS Pitfalls & Bug Patterns
-- **Missing `await` & async inside `forEach`:** `arr.forEach(async x => ...)` does not await promises; errors escape as unhandled rejections.
-- **Floating-point inaccuracies:** `0.1 + 0.2 !== 0.3`. Financial logic must use integer cents or dedicated decimal libraries.
-- **Integers exceeding 2^53:** IDs from databases or JSON exceeding `Number.MAX_SAFE_INTEGER` lose precision silently.
-- **Loose equality (`==` vs `===`):** `"" == 0` evaluates to true; `null == undefined` evaluates to true.
-- **Unchecked optional chaining:** `obj?.prop.nested` throws `TypeError` when `obj` is truthy but `prop` is `undefined`.
-- **Default string sorting in `Array.prototype.sort()`:** `[10, 9, 1].sort()` yields `[1, 10, 9]`.
-- **Date constructor pitfalls:** Month index starts at 0; `new Date('2024-01-01')` parses as UTC, whereas `new Date('2024-01-01T00:00')` parses in local time.
-- **Shallow copying:** `{ ...state }` or `Object.assign` mutates inner references in deeply nested structures.
-- **Prototype pollution:** Unsanitized recursive object merging assigning into `__proto__`, `constructor`, or `prototype`.
-- **Listener / interval / stream leaks:** Missing `removeEventListener`, `clearInterval`, or stream drain listeners on teardown.
+## 5. Common JS/TS Pitfalls
+- **Missing `await` / `arr.forEach(async ...)`:** Promises aren't awaited; unhandled rejections escape.
+- **Floating point:** `0.1 + 0.2 !== 0.3`; use integer cents or decimal library.
+- **Safe integer overflow:** IDs `> 2^53 - 1` (`Number.MAX_SAFE_INTEGER`) lose precision silently.
+- **Loose equality (`==`):** `"" == 0` and `null == undefined` are `true`.
+- **Partial optional chaining:** `obj?.prop.nested` throws when `obj` exists and `prop` is `undefined`.
+- **`Array.prototype.sort()`:** `[10, 9, 1].sort()` sorts lexicographically (`[1, 10, 9]`).
+- **`Date` pitfalls:** Months are 0-indexed; `new Date('2024-01-01')` is UTC while `'2024-01-01T00:00'` is local time.
+- **Shallow copy:** `{ ...state }` / `Object.assign` leaks nested object mutations.
+- **Prototype pollution:** Unsanitized recursive merge writing `__proto__`/`constructor`/`prototype`.
+- **Resource leaks:** Missing `removeEventListener`, `clearInterval`, or stream teardown.
