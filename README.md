@@ -61,6 +61,13 @@ Additional deterministic measurements from `scripts/bh.py` PowerShell verificati
 
 ### Installation / การติดตั้ง
 
+#### 0. Full VeriHunt Suite via VeriPilot (Recommended / แนะนำ — คำสั่งเดียวจบครบทั้ง 5 สกิล)
+Install `VeriPilot` + `VeriPR` + `VeriHunt` + `VeriSec` + `VeriPerf` together across Claude Code, Antigravity/Gemini CLI, Cursor, Windsurf, Roo Code, or Cline:
+```bash
+git clone https://github.com/lufus4826-eng/veripilot.git ~/.gemini/config/skills/veripilot
+python ~/.gemini/config/skills/veripilot/scripts/vpilot.py install --platform antigravity   # or --platform claude | --platform all
+```
+
 #### 1. Claude Code
 ```bash
 # User-global installation (Recommended / แนะนำ)
@@ -240,11 +247,13 @@ git clone --branch v1.0-legacy --depth 1 https://github.com/lufus4826-eng/verihu
 ## 🌐 VeriHunt Ecosystem / ระบบนิเวศตระกูล VeriHunt
 
 VeriHunt shares the isolated `.bughunt/` workspace convention and empirical Dual-Gate philosophy with its companion skills:
+- **[VeriPilot (VeriHunt Suite)](https://github.com/lufus4826-eng/veripilot)** (`veripilot`) — Smart Router, Cumulative Overlay Orchestrator & One-Command Suite Installer (AI Coding Agent Skills Orchestrator).
+- **[VeriPR](https://github.com/lufus4826-eng/veripr)** (`veripr`) — Pre-Commit & PR Differential Guard (`1-hop` caller ripple, `Base` vs. `Head` Git worktrees, API `schema_hash`, Zero-Ripple Fix Gate).
 - **[VeriHunt](https://github.com/lufus4826-eng/verihunt)** (`verihunt`) — Evidence-based correctness, edge-case, and concurrency bug hunting (`FAIL` -> `PASS` in `sandbox-fix`).
-- **[VeriPerf](https://github.com/lufus4826-eng/veriperf)** (`veriperf`) — Statistical profiling (`p50`/`p95`, Peak Memory, `ABBA` interleaving, `>= 15%` speedup Dual Gate).
 - **[VeriSec](https://github.com/lufus4826-eng/verisec)** (`verisec`) — Business-logic & authorization security auditing (`surface-map`, Python+Node network isolation, raw/encoded secret redaction, Dual-Gate remediation).
+- **[VeriPerf](https://github.com/lufus4826-eng/veriperf)** (`veriperf`) — Statistical profiling (`p50`/`p95`, Peak Memory, `ABBA` interleaving, `>= 15%` speedup Dual Gate).
 
-VeriHunt ใช้โครงสร้างเซสชันร่วม `.bughunt/` และมาตรฐานพิสูจน์ผลด้วย Dual Gate ร่วมกับสกิลพี่น้องอีก 2 ตัวในเครือ ได้แก่ **[VeriPerf](https://github.com/lufus4826-eng/veriperf)** (จูนความเร็ว/ลดแรมเชิงสถิติ) และ **[VeriSec](https://github.com/lufus4826-eng/verisec)** (เจาะหาช่องโหว่ลอจิกและสิทธิ์รั่วในพื้นที่ปิด)
+VeriHunt ใช้โครงสร้างเซสชันร่วม `.bughunt/` และมาตรฐานพิสูจน์ผลด้วย Dual Gate ร่วมกับ **[VeriPilot](https://github.com/lufus4826-eng/veripilot)** (ตัวคัดเลือกและร้อยเรียงสกิลอัตโนมัติ + ตัวติดตั้งรวมชุด) และสกิลเฉพาะทางในเครืออีก 3 ตัว ได้แก่ **[VeriPR](https://github.com/lufus4826-eng/veripr)** (ตรวจผลกระทบลูกโซ่และสัญญา API ก่อนส่ง PR), **[VeriSec](https://github.com/lufus4826-eng/verisec)** (เจาะหาช่องโหว่ลอจิกและสิทธิ์รั่วในพื้นที่ปิด) และ **[VeriPerf](https://github.com/lufus4826-eng/veriperf)** (จูนความเร็ว/ลดแรมเชิงสถิติ)
 
 ---
 
