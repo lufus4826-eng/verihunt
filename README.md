@@ -7,9 +7,9 @@
 [![Cross Platform](https://img.shields.io/badge/OS-Windows%20%7C%20macOS%20%7C%20Linux-orange.svg)](#supported-stacks--ภาษาและเครื่องมือที่รองรับ)
 [![Bilingual](https://img.shields.io/badge/Language-English%20%2B%20%E0%B8%A0%E0%B8%B2%E0%B8%A9%E0%B8%B2%E0%B9%84%E0%B8%97%E0%B8%A2-teal.svg)](#how-to-invoke--ตัวอย่างคำสั่งใช้งาน)
 
-> **VeriHunt v2.0 (formerly `bug-hunter`) — Evidence-Based Bug Hunting Agent Skill:** Hypothesize → Prove with real tests in an isolated sandbox → Refine across disciplined cycles → Deliver a verified Markdown report with regression tests and sandbox-proven diffs, without modifying your host codebase.
+> **VeriHunt v2.1.0 (formerly `bug-hunter`) — Evidence-Based Bug Hunting Agent Skill:** Hypothesize → Prove with real tests in an isolated sandbox → Refine across disciplined cycles → Deliver a verified Markdown report with regression tests and sandbox-proven diffs, without modifying your host codebase.
 >
-> **VeriHunt v2.0 (เดิมชื่อ `bug-hunter`) — สกิล AI Agent สำหรับไล่ล่าและพิสูจน์บัคด้วยหลักฐานจริง:** ตั้งสมมติฐาน → เขียนและรันเทสต์จริงในพื้นที่แยก → ต่อยอดรอบถัดไปอย่างมีวินัย → ส่งมอบรายงาน `.md` พร้อมชุด regression tests และวิธีแก้ที่ยืนยันใน sandbox แล้ว โดยไม่แตะโค้ดต้นฉบับแม้แต่บรรทัดเดียว
+> **VeriHunt v2.1.0 (เดิมชื่อ `bug-hunter`) — สกิล AI Agent สำหรับไล่ล่าและพิสูจน์บัคด้วยหลักฐานจริง:** ตั้งสมมติฐาน → เขียนและรันเทสต์จริงในพื้นที่แยก → ต่อยอดรอบถัดไปอย่างมีวินัย → ส่งมอบรายงาน `.md` พร้อมชุด regression tests และวิธีแก้ที่ยืนยันใน sandbox แล้ว โดยไม่แตะโค้ดต้นฉบับแม้แต่บรรทัดเดียว
 
 ---
 
@@ -85,7 +85,7 @@ git clone https://github.com/lufus4826-eng/verihunt.git ~/.gemini/config/skills/
 # Windows (PowerShell)
 git clone https://github.com/lufus4826-eng/verihunt.git "$HOME\.gemini\config\skills\verihunt"
 ```
-> **Upgrading from v1 (`bug-hunter` / `bug-hunter-th`)?** Remove the old `bug-hunter` and `bug-hunter-th` skill folders after cloning `verihunt` so your agent always loads the unified v2.0 skill.
+> **Upgrading from v1 (`bug-hunter` / `bug-hunter-th`)?** Remove the old `bug-hunter` and `bug-hunter-th` skill folders after cloning `verihunt` so your agent always loads the unified `v2.1.0` skill.
 
 #### 3. Cursor / Windsurf / Roo Code / Cline / Other Agent Runtimes
 Clone into your agent's skills directory:
@@ -244,16 +244,19 @@ git clone --branch v1.0-legacy --depth 1 https://github.com/lufus4826-eng/verihu
 
 ---
 
-## 🌐 VeriHunt Ecosystem / ระบบนิเวศตระกูล VeriHunt
+## 🌐 Veri-Suite Ecosystem / ระบบนิเวศตระกูล Veri-Suite
 
-VeriHunt shares the isolated `.bughunt/` workspace convention and empirical Dual-Gate philosophy with its companion skills:
-- **[VeriPilot (VeriHunt Suite)](https://github.com/lufus4826-eng/veripilot)** (`veripilot`) — Smart Router, Cumulative Overlay Orchestrator & One-Command Suite Installer (AI Coding Agent Skills Orchestrator).
-- **[VeriPR](https://github.com/lufus4826-eng/veripr)** (`veripr`) — Pre-Commit & PR Differential Guard (`1-hop` caller ripple, `Base` vs. `Head` Git worktrees, API `schema_hash`, Zero-Ripple Fix Gate).
-- **[VeriHunt](https://github.com/lufus4826-eng/verihunt)** (`verihunt`) — Evidence-based correctness, edge-case, and concurrency bug hunting (`FAIL` -> `PASS` in `sandbox-fix`).
-- **[VeriSec](https://github.com/lufus4826-eng/verisec)** (`verisec`) — Business-logic & authorization security auditing (`surface-map`, Python+Node network isolation, raw/encoded secret redaction, Dual-Gate remediation).
-- **[VeriPerf](https://github.com/lufus4826-eng/veriperf)** (`veriperf`) — Statistical profiling (`p50`/`p95`, Peak Memory, `ABBA` interleaving, `>= 15%` speedup Dual Gate).
+[![Browse Veri-Suite](https://img.shields.io/badge/Catalog-Browse%20Only%20Veri--Suite%20(5)-2ea44f.svg)](https://github.com/lufus4826-eng?tab=repositories&q=topic%3Averi-suite)
 
-VeriHunt ใช้โครงสร้างเซสชันร่วม `.bughunt/` และมาตรฐานพิสูจน์ผลด้วย Dual Gate ร่วมกับ **[VeriPilot](https://github.com/lufus4826-eng/veripilot)** (ตัวคัดเลือกและร้อยเรียงสกิลอัตโนมัติ + ตัวติดตั้งรวมชุด) และสกิลเฉพาะทางในเครืออีก 3 ตัว ได้แก่ **[VeriPR](https://github.com/lufus4826-eng/veripr)** (ตรวจผลกระทบลูกโซ่และสัญญา API ก่อนส่ง PR), **[VeriSec](https://github.com/lufus4826-eng/verisec)** (เจาะหาช่องโหว่ลอจิกและสิทธิ์รั่วในพื้นที่ปิด) และ **[VeriPerf](https://github.com/lufus4826-eng/veriperf)** (จูนความเร็ว/ลดแรมเชิงสถิติ)
+VeriHunt shares the isolated `.bughunt/` workspace convention and empirical Dual-Gate philosophy across the 5-repo **Veri-Suite Ecosystem**:
+
+| Skill | Role in Causal Chain | Pinned Release | Repository |
+|---|---|---|---|
+| **VeriPilot** | Hub, Smart Router, Cumulative Overlay & 1-Command Installer | `v1.0.1` | [`lufus4826-eng/veripilot`](https://github.com/lufus4826-eng/veripilot) |
+| **VeriPR** | Stage 1a: Pre-Commit & PR Differential Guard (`1-hop` ripple + `schema_hash`) | `v1.1.0` | [`lufus4826-eng/veripr`](https://github.com/lufus4826-eng/veripr) |
+| **VeriHunt** *(Current Repo / คลังปัจจุบัน)* | Stage 1b: Deep Evidence-Based Bug Hunting & Sandbox Verifier | `v2.1.0` | [`lufus4826-eng/verihunt`](https://github.com/lufus4826-eng/verihunt) |
+| **VeriSec** | Stage 2: Defensive AppSec, Authz Invariant & Air-Gapped PoC Verifier | `v1.1.0` | [`lufus4826-eng/verisec`](https://github.com/lufus4826-eng/verisec) |
+| **VeriPerf** | Stage 3: Statistical Profiling (`p50`/`p95`, Peak RAM, `ABBA` Interleaving) | `v1.1.1` | [`lufus4826-eng/veriperf`](https://github.com/lufus4826-eng/veriperf) |
 
 ---
 
