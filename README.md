@@ -237,6 +237,17 @@ git clone --branch v1.0-legacy --depth 1 https://github.com/lufus4826-eng/verihu
 
 ---
 
+## 🌐 VeriHunt Ecosystem / ระบบนิเวศตระกูล VeriHunt
+
+VeriHunt shares the isolated `.bughunt/` workspace convention and empirical Dual-Gate philosophy with its companion skills:
+- **[VeriHunt](https://github.com/lufus4826-eng/verihunt)** (`verihunt`) — Evidence-based correctness, edge-case, and concurrency bug hunting (`FAIL` -> `PASS` in `sandbox-fix`).
+- **[VeriPerf](https://github.com/lufus4826-eng/veriperf)** (`veriperf`) — Statistical profiling (`p50`/`p95`, Peak Memory, `ABBA` interleaving, `>= 15%` speedup Dual Gate).
+- **[VeriSec](https://github.com/lufus4826-eng/verisec)** (`verisec`) — Business-logic & authorization security auditing (`surface-map`, Python+Node network isolation, raw/encoded secret redaction, Dual-Gate remediation).
+
+VeriHunt ใช้โครงสร้างเซสชันร่วม `.bughunt/` และมาตรฐานพิสูจน์ผลด้วย Dual Gate ร่วมกับสกิลพี่น้องอีก 2 ตัวในเครือ ได้แก่ **[VeriPerf](https://github.com/lufus4826-eng/veriperf)** (จูนความเร็ว/ลดแรมเชิงสถิติ) และ **[VeriSec](https://github.com/lufus4826-eng/verisec)** (เจาะหาช่องโหว่ลอจิกและสิทธิ์รั่วในพื้นที่ปิด)
+
+---
+
 ## 🤝 Contributing & License / ร่วมพัฒนาและใบอนุญาต
 
 - Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for adapter, `bh.py`, and taxonomy guidelines.
